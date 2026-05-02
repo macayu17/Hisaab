@@ -59,9 +59,16 @@ export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
-        <Stack screenOptions={{ headerShown: false, animation: "fade_from_bottom" }}>
+        <Stack screenOptions={{ headerShown: false, animation: "fade_from_bottom", contentStyle: { backgroundColor: colors.ink } }}>
           <Stack.Screen name="(tabs)" />
-          <Stack.Screen name="add" options={{ presentation: "modal" }} />
+          <Stack.Screen
+            name="add"
+            options={{
+              presentation: Platform.OS === "ios" ? "modal" : "card",
+              animation: Platform.OS === "ios" ? "fade_from_bottom" : "slide_from_bottom",
+              contentStyle: { backgroundColor: colors.ink },
+            }}
+          />
           <Stack.Screen name="friend/[id]" />
         </Stack>
       </SafeAreaProvider>

@@ -1,24 +1,52 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
-import DateTimePicker from "@react-native-community/datetimepicker";
-import * as Contacts from "expo-contacts";
+import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
-import { CalendarDays, Check, ContactRound, IndianRupee, Trash2, X } from "lucide-react-native";
+import { CalendarDays, Check, ContactRound, IndianRupee, Plus, Trash2, X } from "lucide-react-native";
 import { Screen } from "@/components/ui/Screen";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import { ConfirmSheet } from "@/components/ui/ConfirmSheet";
 import { colors } from "@/lib/theme";
-import { addDays, formatFullDate, startOfToday } from "@/lib/utils";
+import { addDays, formatFullDate, startOfToday, uid } from "@/lib/utils";
 import { useHisaabStore } from "@/lib/store/useHisaabStore";
 import { notifySuccess, notifyWarning } from "@/lib/safeHaptics";
 import type { DebtDirection } from "@/types/hisaab";
+
+type NativeDateTimePickerProps = {
+  value: Date;
+  mode: "date" | "time" | "datetime";
+  maximumDate?: Date;
+  minimumDate?: Date;
+  onChange: (event: unknown, selected?: Date) => void;
+};
+
+let NativeDateTimePicker: React.ComponentType<NativeDateTimePickerProps> | null = null;
+try {
+  const datetimePickerModule = require("@react-native-community/datetimepicker");
+  NativeDateTimePicker = datetimePickerModule.default ?? null;
+} catch {
+  NativeDateTimePicker = null;
+}
 
 type ContactChoice = {
   id: string;
   name: string;
   phone: string | null;
 };
+
+type EntryDraft = {
+  id: string;
+  amount: string;
+  note: string;
+};
+
+function createEntryDraft(seed?: Partial<Pick<EntryDraft, "amount" | "note">>): EntryDraft {
+  return {
+    id: uid("entry"),
+    amount: seed?.amount ?? "",
+    note: seed?.note ?? "",
+  };
+}
 
 function getParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
@@ -41,8 +69,7 @@ export default function AddDebtScreen() {
 
   const [friendName, setFriendName] = useState("");
   const [phone, setPhone] = useState<string | null>(null);
-  const [amount, setAmount] = useState("");
-  const [note, setNote] = useState("");
+  const [entries, setEntries] = useState<EntryDraft[]>(() => [createEntryDraft()]);
   const [direction, setDirection] = useState<DebtDirection>("lent");
   const [dateBorrowed, setDateBorrowed] = useState(startOfToday());
   const [dueEnabled, setDueEnabled] = useState(false);
@@ -59,36 +86,79 @@ export default function AddDebtScreen() {
     if (!editingDebt) return;
     setFriendName(editingDebt.friend_name);
     setPhone(editingDebt.friend_phone);
-    setAmount(String(Math.round(editingDebt.amount)));
-    setNote(editingDebt.note ?? "");
+    setEntries([createEntryDraft({ amount: String(Math.round(editingDebt.amount)), note: editingDebt.note ?? "" })]);
     setDirection(editingDebt.direction);
     setDateBorrowed(editingDebt.date_borrowed);
     setDueEnabled(Boolean(editingDebt.due_date));
     setDueDate(editingDebt.due_date ?? addDays(startOfToday(), 7));
   }, [editingDebt?.id]);
-
-  const numericAmount = Number(amount.replace(/,/g, ""));
   const title = editingDebt ? "Edit Debt" : "Log a Debt";
 
+  function updateEntry(id: string, patch: Partial<EntryDraft>) {
+    setEntries((current) => current.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry)));
+  }
+
+  function addEntryRow() {
+    setEntries((current) => [...current, createEntryDraft()]);
+  }
+
+  function removeEntryRow(id: string) {
+    setEntries((current) => {
+      if (current.length <= 1) return current;
+      return current.filter((entry) => entry.id !== id);
+    });
+  }
+
   async function pickContact() {
-    const permission = await Contacts.requestPermissionsAsync();
+    let ContactsModule: typeof import("expo-contacts") | null = null;
+    try {
+      ContactsModule = require("expo-contacts") as typeof import("expo-contacts");
+    } catch {
+      ContactsModule = null;
+    }
+
+    if (!ContactsModule) {
+      Alert.alert("Contacts unavailable", "Contacts access is not available in this build. Enter name manually.");
+      return;
+    }
+
+    const permission = await ContactsModule.requestPermissionsAsync();
     if (!permission.granted) {
       Alert.alert("Contacts blocked", "Manual name entry still works. Enable contacts later if you want autocomplete.");
       return;
     }
 
-    const result = await Contacts.getContactsAsync({
-      fields: [Contacts.Fields.PhoneNumbers],
-      pageSize: 60,
-    });
+    const allContacts: Array<{ id?: string; name?: string; phoneNumbers?: Array<{ number?: string | null }> }> = [];
+    let pageOffset = 0;
+    const pageSize = 250;
 
-    const choices = result.data
-      .filter((contact) => contact.name)
-      .map((contact) => ({
-        id: contact.id ?? contact.name,
-        name: contact.name,
-        phone: contact.phoneNumbers?.[0]?.number ?? null,
-      }));
+    while (true) {
+      const result = await ContactsModule.getContactsAsync({
+        fields: [ContactsModule.Fields.PhoneNumbers],
+        pageSize,
+        pageOffset,
+      });
+
+      allContacts.push(...result.data);
+
+      if (!result.hasNextPage || result.data.length === 0) {
+        break;
+      }
+
+      pageOffset += result.data.length;
+      if (allContacts.length > 6000) break;
+    }
+
+    const choices: ContactChoice[] = allContacts
+      .filter((contact): contact is { id?: string; name: string; phoneNumbers?: Array<{ number?: string | null }> } => {
+        return typeof contact.name === "string" && contact.name.trim().length > 0;
+      })
+      .map((contact, index) => ({
+        id: contact.id ?? `${contact.name}-${index}`,
+        name: contact.name.trim(),
+        phone: contact.phoneNumbers?.find((item) => typeof item?.number === "string")?.number ?? null,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
 
     if (!choices.length) {
       Alert.alert("No contacts found", "Type the friend's name manually.");
@@ -104,28 +174,46 @@ export default function AddDebtScreen() {
       setError("Friend name is required.");
       return;
     }
-    if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
-      setError("Enter a valid amount greater than zero.");
+    const parsedEntries = entries.map((entry) => ({
+      ...entry,
+      amountNumber: Number(entry.amount.replace(/,/g, "")),
+      noteValue: entry.note.trim(),
+    }));
+
+    if (parsedEntries.some((entry) => !entry.amount.trim() || !Number.isFinite(entry.amountNumber) || entry.amountNumber <= 0)) {
+      setError("Each baaki row needs a valid amount greater than zero.");
       return;
     }
 
     setSaving(true);
     setError(null);
-    const payload = {
-      friendName,
-      phone,
-      amount: numericAmount,
-      note,
-      direction,
-      dateBorrowed,
-      dueDate: dueEnabled ? normalizedReminderTime(dueDate) : null,
-    };
 
     try {
       if (editingDebt) {
+        const [firstEntry] = parsedEntries;
+        const payload = {
+          friendName,
+          phone,
+          amount: firstEntry.amountNumber,
+          note: firstEntry.noteValue || null,
+          direction,
+          dateBorrowed,
+          dueDate: dueEnabled ? normalizedReminderTime(dueDate) : null,
+        };
         await updateDebt(editingDebt.id, payload);
       } else {
-        await addDebt(payload);
+        for (const entry of parsedEntries) {
+          const payload = {
+            friendName,
+            phone,
+            amount: entry.amountNumber,
+            note: entry.noteValue || null,
+            direction,
+            dateBorrowed,
+            dueDate: dueEnabled ? normalizedReminderTime(dueDate) : null,
+          };
+          await addDebt(payload);
+        }
       }
       await notifySuccess();
       router.back();
@@ -170,20 +258,50 @@ export default function AddDebtScreen() {
             </Pressable>
           </View>
 
-          <FieldLabel label="Amount" />
-          <View style={styles.amountInputWrap}>
-            <IndianRupee color={colors.amber} size={26} />
-            <TextInput
-              value={amount}
-              onChangeText={(next) => setAmount(next.replace(/[^0-9.]/g, ""))}
-              placeholder="500"
-              placeholderTextColor="rgba(245,163,32,0.42)"
-              keyboardType="numeric"
-              style={styles.amountInput}
-              selectionColor={colors.amber}
-              accessibilityLabel="Amount in rupees"
-            />
-          </View>
+          <FieldLabel label="Baaki rows" />
+          {entries.map((entry, index) => (
+            <View key={entry.id} style={styles.entryRow}>
+              <View style={styles.entryAmountWrap}>
+                <IndianRupee color={colors.amber} size={18} />
+                <TextInput
+                  value={entry.amount}
+                  onChangeText={(next) => updateEntry(entry.id, { amount: next.replace(/[^0-9.]/g, "") })}
+                  placeholder="500"
+                  placeholderTextColor="rgba(245,163,32,0.42)"
+                  keyboardType="numeric"
+                  style={styles.entryAmountInput}
+                  selectionColor={colors.amber}
+                  accessibilityLabel={`Amount row ${index + 1}`}
+                />
+              </View>
+              <TextInput
+                value={entry.note}
+                onChangeText={(next) => updateEntry(entry.id, { note: next })}
+                placeholder="Note"
+                placeholderTextColor={colors.muted}
+                style={styles.entryNoteInput}
+                selectionColor={colors.amber}
+                accessibilityLabel={`Note row ${index + 1}`}
+              />
+              {!editingDebt ? (
+                <Pressable
+                  style={[styles.rowDeleteButton, entries.length === 1 && styles.rowDeleteButtonDisabled]}
+                  onPress={() => removeEntryRow(entry.id)}
+                  disabled={entries.length === 1}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Remove row ${index + 1}`}
+                >
+                  <Trash2 color={colors.danger} size={15} />
+                </Pressable>
+              ) : null}
+            </View>
+          ))}
+          {!editingDebt ? (
+            <Pressable style={styles.addRowButton} onPress={addEntryRow} accessibilityRole="button" accessibilityLabel="Add another baaki row">
+              <Plus color={colors.amber} size={16} />
+              <Text style={styles.addRowText}>Add more baaki</Text>
+            </Pressable>
+          ) : null}
 
           <FieldLabel label="Direction" />
           <SegmentedControl
@@ -195,21 +313,20 @@ export default function AddDebtScreen() {
             ]}
           />
 
-          <FieldLabel label="Note" />
-          <TextInput
-            value={note}
-            onChangeText={setNote}
-            placeholder="Chai & snacks"
-            placeholderTextColor={colors.muted}
-            style={[styles.input, styles.fullInput]}
-            selectionColor={colors.amber}
-            accessibilityLabel="Debt note"
-          />
-
           <View style={styles.dateGrid}>
             <View style={styles.dateColumn}>
               <FieldLabel label="Date borrowed" />
-              <Pressable style={styles.dateButton} onPress={() => setShowBorrowedPicker(true)} accessibilityRole="button">
+              <Pressable
+                style={styles.dateButton}
+                onPress={() => {
+                  if (!NativeDateTimePicker) {
+                    Alert.alert("Date picker unavailable", "This build cannot open the date picker. Rebuild after updating dependencies.");
+                    return;
+                  }
+                  setShowBorrowedPicker(true);
+                }}
+                accessibilityRole="button"
+              >
                 <CalendarDays color={colors.amber} size={16} />
                 <Text style={styles.dateText}>{formatFullDate(dateBorrowed)}</Text>
               </Pressable>
@@ -220,6 +337,10 @@ export default function AddDebtScreen() {
                 style={[styles.dateButton, dueEnabled && styles.dateButtonActive]}
                 onPress={() => {
                   if (!dueEnabled) setDueEnabled(true);
+                  if (!NativeDateTimePicker) {
+                    Alert.alert("Date picker unavailable", "This build cannot open the date picker. Rebuild after updating dependencies.");
+                    return;
+                  }
                   setShowDuePicker(true);
                 }}
                 accessibilityRole="button"
@@ -251,8 +372,8 @@ export default function AddDebtScreen() {
         </Pressable>
       </Screen>
 
-      {showBorrowedPicker ? (
-        <DateTimePicker
+      {showBorrowedPicker && NativeDateTimePicker ? (
+        <NativeDateTimePicker
           value={new Date(dateBorrowed)}
           mode="date"
           maximumDate={new Date()}
@@ -263,8 +384,8 @@ export default function AddDebtScreen() {
         />
       ) : null}
 
-      {showDuePicker ? (
-        <DateTimePicker
+      {showDuePicker && NativeDateTimePicker ? (
+        <NativeDateTimePicker
           value={new Date(dueDate)}
           mode="date"
           minimumDate={new Date()}
@@ -329,17 +450,19 @@ function ContactsSheet({
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
         <GlassCard style={styles.contactsCard} innerStyle={styles.contactsInner}>
           <Text style={styles.contactsTitle}>Pick a contact</Text>
-          {contacts.slice(0, 18).map((contact) => (
-            <Pressable key={contact.id} style={styles.contactRow} onPress={() => onPick(contact)} accessibilityRole="button">
-              <View style={styles.contactAvatar}>
-                <Text style={styles.contactAvatarText}>{contact.name[0]?.toUpperCase()}</Text>
-              </View>
-              <View style={styles.contactMain}>
-                <Text style={styles.contactName}>{contact.name}</Text>
-                <Text style={styles.contactPhone}>{contact.phone ?? "No phone number"}</Text>
-              </View>
-            </Pressable>
-          ))}
+          <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+            {contacts.map((contact) => (
+              <Pressable key={contact.id} style={styles.contactRow} onPress={() => onPick(contact)} accessibilityRole="button">
+                <View style={styles.contactAvatar}>
+                  <Text style={styles.contactAvatarText}>{contact.name[0]?.toUpperCase()}</Text>
+                </View>
+                <View style={styles.contactMain}>
+                  <Text style={styles.contactName}>{contact.name}</Text>
+                  <Text style={styles.contactPhone}>{contact.phone ?? "No phone number"}</Text>
+                </View>
+              </Pressable>
+            ))}
+          </ScrollView>
         </GlassCard>
       </View>
     </Modal>
@@ -434,9 +557,6 @@ const styles = StyleSheet.create({
     fontFamily: "Montserrat_500Medium",
     fontSize: 15,
   },
-  fullInput: {
-    flex: 0,
-  },
   inlineButton: {
     width: 50,
     height: 50,
@@ -447,23 +567,75 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(245,163,32,0.28)",
   },
-  amountInputWrap: {
-    minHeight: 72,
+  entryRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 8,
+  },
+  entryAmountWrap: {
+    minHeight: 48,
+    minWidth: 110,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: "rgba(245,163,32,0.32)",
     backgroundColor: "rgba(245,163,32,0.08)",
-    paddingHorizontal: 16,
+    paddingHorizontal: 10,
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
+    gap: 4,
   },
-  amountInput: {
+  entryAmountInput: {
     flex: 1,
     color: colors.amber,
-    fontFamily: "Cinzel_700Bold",
-    fontSize: 42,
-    lineHeight: 48,
+    fontFamily: "Montserrat_700Bold",
+    fontSize: 18,
+    lineHeight: 24,
+    minWidth: 62,
+  },
+  entryNoteInput: {
+    flex: 1,
+    minHeight: 48,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.glassBorder,
+    backgroundColor: "rgba(255,255,255,0.05)",
+    paddingHorizontal: 12,
+    color: colors.mist,
+    fontFamily: "Montserrat_500Medium",
+    fontSize: 13,
+  },
+  rowDeleteButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,82,82,0.1)",
+    borderWidth: 1,
+    borderColor: "rgba(255,82,82,0.28)",
+  },
+  rowDeleteButtonDisabled: {
+    opacity: 0.35,
+  },
+  addRowButton: {
+    marginTop: 10,
+    minHeight: 40,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(245,163,32,0.28)",
+    backgroundColor: "rgba(245,163,32,0.08)",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 7,
+  },
+  addRowText: {
+    color: colors.amber,
+    fontFamily: "Montserrat_700Bold",
+    fontSize: 12,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
   },
   dateGrid: {
     flexDirection: "row",
