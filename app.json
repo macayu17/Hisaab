@@ -1,0 +1,43 @@
+{
+  "expo": {
+    "name": "Hisaab",
+    "slug": "hisaab",
+    "scheme": "hisaab",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "web": {
+      "bundler": "metro"
+    },
+    "android": {
+      "package": "com.hisaab.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#09100E"
+      },
+      "permissions": [
+        "READ_CONTACTS",
+        "POST_NOTIFICATIONS"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-notifications"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "aa4cef93-77c4-4e42-84c9-76642e8f2289"
+      }
+    },
+    "owner": "ayushhoff"
+  }
+}
