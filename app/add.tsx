@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Alert, FlatList, Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { CalendarDays, Check, ContactRound, IndianRupee, Plus, Trash2, X } from "lucide-react-native";
 import { Screen } from "@/components/ui/Screen";
@@ -450,9 +450,15 @@ function ContactsSheet({
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
         <GlassCard style={styles.contactsCard} innerStyle={styles.contactsInner}>
           <Text style={styles.contactsTitle}>Pick a contact</Text>
-          <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-            {contacts.map((contact) => (
-              <Pressable key={contact.id} style={styles.contactRow} onPress={() => onPick(contact)} accessibilityRole="button">
+          <FlatList
+            data={contacts}
+            keyExtractor={(item) => item.id}
+            keyboardShouldPersistTaps="handled"
+            initialNumToRender={28}
+            maxToRenderPerBatch={32}
+            windowSize={8}
+            renderItem={({ item: contact }) => (
+              <Pressable style={styles.contactRow} onPress={() => onPick(contact)} accessibilityRole="button">
                 <View style={styles.contactAvatar}>
                   <Text style={styles.contactAvatarText}>{contact.name[0]?.toUpperCase()}</Text>
                 </View>
@@ -461,8 +467,8 @@ function ContactsSheet({
                   <Text style={styles.contactPhone}>{contact.phone ?? "No phone number"}</Text>
                 </View>
               </Pressable>
-            ))}
-          </ScrollView>
+            )}
+          />
         </GlassCard>
       </View>
     </Modal>

@@ -59,7 +59,13 @@ export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
-        <Stack screenOptions={{ headerShown: false, animation: "fade_from_bottom", contentStyle: { backgroundColor: colors.ink } }}>
+        <Stack
+          screenOptions={{
+            headerShown: false,
+            animation: Platform.OS === "android" ? "none" : "fade_from_bottom",
+            contentStyle: { backgroundColor: colors.ink },
+          }}
+        >
           <Stack.Screen name="(tabs)" />
           <Stack.Screen
             name="add"
